@@ -10,8 +10,8 @@ import pickle as pkl
 import argparse
 import pprint
 
-from models.stclassifier import PseTae, PseLTae, PseGru, PseTempCNN
-from dataset import PixelSetData, PixelSetData_preloaded, PixelSetData_sits
+from models.stclassifier import PseTae, PseLTae, DseLTae, PseGru, PseTempCNN
+from dataset import PixelSetData, PixelSetData_preloaded, PixelSetData_dse
 from learning.focal_loss import FocalLoss
 from learning.weight_init import weight_init
 from learning.metrics import mIou, confusion_matrix_analysis
@@ -32,6 +32,7 @@ def train_epoch(model, optimizer, criterion, data_loader, device, config):
 
         optimizer.zero_grad()
         out = model(x)
+        #print("out",out, y.long())
         loss = criterion(out, y.long())
         loss.backward()
         optimizer.step()
@@ -84,9 +85,9 @@ def evaluation(model, criterion, loader, device, config, mode='val'):
     elif mode == 'test':
         return metrics, confusion_matrix(y_true, y_pred, labels=list(range(config['num_classes'])))
 
-
 def get_loaders(dt, kfold, config):
     indices = list(range(len(dt)))
+    print("lenn",len(dt))
     np.random.shuffle(indices)
 
     kf = KFold(n_splits=kfold, shuffle=False)
@@ -163,20 +164,19 @@ def main(config):
     prepare_output(config)
     mean_std = None
     try:
-        mean_std = pkl.load(open(config['dataset_folder'] + '/S2-2017-T31TFM-meanstd.pkl', 'rb'))
+        pass
+        #mean_std = pkl.load(open(config['dataset_folder'] + '/S2-2017-T31TFM-meanstd.pkl', 'rb'))
     except:
         print("Not found /S2-2017-T31TFM-meanstd.pkl")
 
     extra = 'geomfeat' if config['geomfeat'] else None
 
     # We only consider the subset of classes with more than 100 samples in the S2-Agri dataset
-    subset = [1, 3, 4, 5, 6, 8, 9, 12, 13, 14, 16, 18, 19, 23, 28, 31, 33, 34, 36, 39]
+    # subset = [1, 3, 4, 5, 6, 8, 9, 12, 13, 14, 16, 18, 19, 23, 28, 31, 33, 34, 36, 39]
+    subset = None
 
-    if config['sits_loader']:
-        dt = PixelSetData_sits(config['dataset_folder'], labels='label_44class', npixel=config['npixel'],
-                                    sub_classes=subset,
-                                    norm=mean_std,
-                                    extra_feature=extra)
+    if config['dse']:
+        dt = PixelSetData_dse(config['dataset_folder'])
 
     elif config['preload']:
         dt = PixelSetData_preloaded(config['dataset_folder'], labels='label_44class', npixel=config['npixel'],
@@ -189,8 +189,11 @@ def main(config):
                           norm=mean_std,
                           extra_feature=extra)
     device = torch.device(config['device'])
+    if config['dse']:
+        loaders = dt.get_loaders(config)
+    else:
+        loaders = get_loaders(dt, config['kfold'], config)
 
-    loaders = get_loaders(dt, config['kfold'], config)
     for fold, (train_loader, val_loader, test_loader) in enumerate(loaders):
         print('Starting Fold {}'.format(fold + 1))
         print('Train {}, Val {}, Test {}'.format(len(train_loader), len(val_loader), len(test_loader)))
@@ -229,6 +232,15 @@ def main(config):
             else:
                 model_config.update(with_extra=False, extra_size=None)
             model = PseTempCNN(**model_config)
+        
+        elif config['dse']:
+            model_config = dict(input_dim=config['input_dim'], mlp1=config['mlp1'], n_head=config['n_head'], d_k=config['d_k'], mlp3=config['mlp3'],
+                                dropout=config['dropout'], T=config['T'], len_max_seq=config['lms'],
+                                positions=dt.date_positions if config['positions'] == 'bespoke' else None,
+                                mlp4=config['mlp4'], d_model=config['d_model'])
+            
+            
+            model = DseLTae(**model_config)
 
 
         else:
@@ -307,8 +319,8 @@ if __name__ == '__main__':
                         help='Interval in batches between display of training metrics')
     parser.add_argument('--preload', dest='preload', action='store_true',
                         help='If specified, the whole dataset is loaded to RAM at initialization')
-    parser.add_argument('--sits_loader', dest='sits_loader', action='store_true',
-                        help='If specified, Will load SITS with masks')
+    parser.add_argument('--dse', dest='dse', action='store_true',
+                        help='If specified, Will load SITS dataset and use DSE with masks')
     parser.set_defaults(preload=False)
     parser.set_defaults(sits_loader=False)
 
@@ -339,7 +351,7 @@ if __name__ == '__main__':
     parser.add_argument('--lms', default=24, type=int,
                         help='Maximum sequence length for positional encoding (only necessary if positions == order)')
     parser.add_argument('--dropout', default=0.2, type=float, help='Dropout probability')
-    parser.add_argument('--d_model', default=256, type=int,
+    parser.add_argument('--d_model', default=None, type=int,
                         help="size of the embeddings (E), if input vectors are of a different size, a linear layer is used to project them to a d_model-dimensional space"
                         )
 

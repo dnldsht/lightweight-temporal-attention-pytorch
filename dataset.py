@@ -8,166 +8,66 @@ import datetime as dt
 
 import os
 import json
+from sklearn.utils import shuffle
 
 
-class PixelSetData_sits(data.Dataset):
-    def __init__(self, folder, labels, npixel, sub_classes=None, norm=None,
-                 extra_feature=None, jitter=(0.01, 0.05), return_id=False):
-        """
+class PixelSetData_dse(data.Dataset):
+  def __init__(self, folder, MISSING_VALUE=0):
+    """
 
-        Args:
-            folder (str): path to the main folder of the dataset, formatted as indicated in the readme
-            labels (str): name of the nomenclature to use in the labels.json file
-            npixel (int): Number of sampled pixels in each parcel
-            sub_classes (list): If provided, only the samples from the given list of classes are considered.
-            (Can be used to remove classes with too few samples)
-            norm (tuple): (mean,std) tuple to use for normalization
-            extra_feature (str): name of the additional static feature file to use
-            jitter (tuple): if provided (sigma, clip) values for the addition random gaussian noise
-            return_id (bool): if True, the id of the yielded item is also returned (useful for inference)
-        """
-        super(PixelSetData_sits, self).__init__()
+    Args:
+        folder (str): path to the main folder of the dataset, formatted as indicated in the readme
+    """
+    super(PixelSetData_dse, self).__init__()
+    self.folder = folder
 
-        self.folder = folder
-        self.data_folder = os.path.join(folder, 'DATA')
-        self.meta_folder = os.path.join(folder, 'META')
-        self.labels = labels
-        self.npixel = npixel
-        self.norm = norm
+    self.data = np.load(os.path.join(folder,'D1_balaruc_samples.npy'))
+    self.masks = np.load(os.path.join(folder,'D2_balaruc_masks.npy'))
+    self.lut = np.load(os.path.join(folder,'D3_balaruc_lut.npy'))
 
-        self.extra_feature = extra_feature
-        self.jitter = jitter  # (sigma , clip )
-        self.return_id = return_id
+    self.data[np.where(self.masks == 1)] = MISSING_VALUE
 
-        l = [f for f in os.listdir(self.data_folder) if f.endswith('.npy') and not f.endswith('_mask.npy')]
-        self.pid = [int(f.split('.')[0]) for f in l]
-        self.pid = list(np.sort(self.pid))
+    self.labels, num_classes = transfer_labels(self.lut[:, 1])
+    
+    self.len = self.data.shape[0]
 
-        self.pid = list(map(str, self.pid))
-        self.len = len(self.pid)
-
-        # Get Labels
-        if sub_classes is not None:
-            sub_indices = []
-            num_classes = len(sub_classes)
-            convert = dict((c, i) for i, c in enumerate(sub_classes))
-
-        with open(os.path.join(folder, 'META', 'labels.json'), 'r') as file:
-            d = json.loads(file.read())
-            self.target = []
-            for i, p in enumerate(self.pid):
-                t = d[labels][p]
-                self.target.append(t)
-                if sub_classes is not None:
-                    if t in sub_classes:
-                        sub_indices.append(i)
-                        self.target[-1] = convert[self.target[-1]]
-        if sub_classes is not None:
-            self.pid = list(np.array(self.pid)[sub_indices])
-            self.target = list(np.array(self.target)[sub_indices])
-            self.len = len(sub_indices)
-
-        with open(os.path.join(folder, 'META', 'dates.json'), 'r') as file:
-            d = json.loads(file.read())
-        self.dates = [d[str(i)] for i in range(len(d))]
-        self.date_positions = date_positions(self.dates)
-
-        if self.extra_feature is not None:
-            with open(os.path.join(self.meta_folder, '{}.json'.format(extra_feature)), 'r') as file:
-                self.extra = json.loads(file.read())
-
-            if isinstance(self.extra[list(self.extra.keys())[0]], int):
-                for k in self.extra.keys():
-                    self.extra[k] = [self.extra[k]]
-            df = pd.DataFrame(self.extra).transpose()
-            self.extra_m, self.extra_s = np.array(df.mean(axis=0)), np.array(df.std(axis=0))
-
-    def __len__(self):
+    with open(os.path.join(folder, 'META', 'dates.json'), 'r') as file:
+      d = json.loads(file.read())
+      self.dates = [d[str(i)] for i in range(len(d))]
+      self.date_positions = date_positions(self.dates)
+  
+  def __len__(self):
         return self.len
 
-    def __getitem__(self, item):
-        """
-        Returns a Pixel-Set sequence tensor with its pixel mask and optional additional features.
-        For each item npixel pixels are randomly dranw from the available pixels.
-        If the total number of pixel is too small one arbitrary pixel is repeated. The pixel mask keeps track of true
-        and repeated pixels.
-        Returns:
-              (Pixel-Set, Pixel-Mask) or ((Pixel-Set, Pixel-Mask), Extra-features) with:
-                Pixel-Set: Sequence_length x Channels x npixel
-                Pixel-Mask : Sequence_length x npixel
-                Extra-features : Sequence_length x Number of additional features
+  def __getitem__(self, index):
+    x = self.data[index]
+    y = self.labels[index]
 
-        """
-        x0 = np.load(os.path.join(self.folder, 'DATA', '{}.npy'.format(self.pid[item])))
-        m0 = np.load(os.path.join(self.folder, 'MASK', '{}.npy'.format(self.pid[item])))
+    return Tensor(x), y
 
-        y = self.target[item]
-        #print("x0",x0.shape)
+  def get_loaders(self, config):
+    folds = [23, 89, 196, 27863]
+    train, val = 0.6, 0.2
+    loader_seq = []
+    for seed in folds:
+        train_indices, validation_indices, test_indices = get_split_idx(self.lut, train_perc=train, val_perc=val, seed=seed)
+        train_sampler = data.sampler.SubsetRandomSampler(train_indices)
+        validation_sampler = data.sampler.SubsetRandomSampler(validation_indices)
+        test_sampler = data.sampler.SubsetRandomSampler(test_indices)
 
-        if x0.shape[-1] > self.npixel:
-            idx = np.random.choice(list(range(x0.shape[-1])), size=self.npixel, replace=False)
-            x = x0[:, :, idx]
-            #mask = np.ones(self.npixel)
-            mask = m0[:, idx]
+        train_loader = data.DataLoader(self, batch_size=config['batch_size'],
+                                        sampler=train_sampler,
+                                        num_workers=config['num_workers'])
+        validation_loader = data.DataLoader(self, batch_size=config['batch_size'],
+                                            sampler=validation_sampler,
+                                            num_workers=config['num_workers'])
+        test_loader = data.DataLoader(self, batch_size=config['batch_size'],
+                                        sampler=test_sampler,
+                                        num_workers=config['num_workers'])
 
-        elif x0.shape[-1] < self.npixel:
-
-            if x0.shape[-1] == 0:
-                # should not happen
-                x = np.zeros((*x0.shape[:2], self.npixel))
-                mask = np.zeros(self.npixel)
-                mask[0] = 1
-            else:
-                x = np.zeros((*x0.shape[:2], self.npixel))
-                mask = np.zeros((x0.shape[0], self.npixel))
-
-                # real pixels
-                x[:, :, :x0.shape[-1]] = x0
-                mask[:, :x0.shape[-1]] = m0
-                
-                # adding pixels
-                x[:, :, x0.shape[-1]:] = np.stack([x[:, :, 0] for _ in range(x0.shape[-1], x.shape[-1])], axis=-1)
-                # mask = np.array(
-                #     [1 for _ in range(x0.shape[-1])] + [0 for _ in range(x0.shape[-1], self.npixel)])
-        else:
-            x = x0
-            # mask = np.ones(self.npixel)
-            mask = m0
-
-        if self.norm is not None:
-            m, s = self.norm
-            m = np.array(m)
-            s = np.array(s)
-
-            if len(m.shape) == 0:
-                x = (x - m) / s
-            elif len(m.shape) == 1:  # Normalise channel-wise
-                x = (x.swapaxes(1, 2) - m) / s
-                x = x.swapaxes(1, 2)  # Normalise channel-wise for each date
-            elif len(m.shape) == 2:
-                x = np.rollaxis(x, 2)  # TxCxS -> SxTxC
-                x = (x - m) / s
-                x = np.swapaxes((np.rollaxis(x, 1)), 1, 2)
-        x = x.astype('float')
-
-        if self.jitter is not None:
-            sigma, clip = self.jitter
-            x = x + np.clip(sigma * np.random.randn(*x.shape), -1 * clip, clip)
-
-        # mask = np.stack([mask for _ in range(x.shape[0])], axis=0)  # Add temporal dimension to mask
-        data = (Tensor(x), Tensor(mask))
-
-        if self.extra_feature is not None:
-            ef = (self.extra[str(self.pid[item])] - self.extra_m) / self.extra_s
-            ef = torch.from_numpy(ef).float()
-
-            ef = torch.stack([ef for _ in range(data[0].shape[0])], dim=0)
-            data = (data, ef)
-
-        if self.return_id:
-            return data, torch.from_numpy(np.array(y, dtype=int)), self.pid[item]
-        else:
-            return data, torch.from_numpy(np.array(y, dtype=int))
+        loader_seq.append((train_loader, validation_loader, test_loader))
+    
+    return loader_seq
 
 
 class PixelSetData(data.Dataset):
@@ -350,3 +250,50 @@ def date_positions(dates):
     for d in dates:
         pos.append(interval_days(d, dates[0]))
     return pos
+
+def transfer_labels(labels):
+    # some labels are [1,2,4,11,13] and is transfer to standard label format [0,1,2,3,4]
+    indexes = np.unique(labels)
+    num_classes = indexes.shape[0]
+    num_samples = labels.shape[0]
+
+    for i in range(num_samples):
+        new_label = np.argwhere(labels[i] == indexes)[0][0]
+        labels[i] = new_label
+    return labels, num_classes
+
+def get_unique_ids_by_class(lut):
+    labels = lut[:, 1]
+    unique_labels = np.unique(labels)
+    ids_by_class = {}
+    for label in unique_labels:
+      idx = np.where(labels == label)
+      lut_subset = lut[idx]
+      ids_by_class[label] = np.unique(lut_subset[:, 0])
+    return ids_by_class
+
+def get_idx_of_object_ids(ids, lut):
+    lut_ids = lut[:, 0]
+    tot_idx = []
+    for i in ids:
+        tot_idx.append(np.where(lut_ids == i)[0])
+    tot_idx = np.concatenate(tot_idx, axis=0)
+    return tot_idx
+
+def get_split_idx(lut, train_perc=.6, val_perc=.2, seed=23):
+    train_idx, valid_idx, test_idx = [], [], []
+    unique_ids_by_class = get_unique_ids_by_class(lut)
+
+    for label in unique_ids_by_class:
+        ids = unique_ids_by_class[label]
+        ids = shuffle(ids, random_state=seed)
+        
+        limit_train = int(len(ids)* train_perc )
+        limit_val = limit_train + int(len(ids)* val_perc)
+        
+        
+        train_idx.extend(get_idx_of_object_ids(ids[0:limit_train], lut))
+        valid_idx.extend(get_idx_of_object_ids(ids[limit_train:limit_val], lut))
+        test_idx.extend(get_idx_of_object_ids(ids[limit_val:], lut))
+
+    return train_idx, valid_idx, test_idx

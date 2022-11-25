@@ -4,10 +4,64 @@ import torch.nn.functional as F
 import os
 
 from models.pse import PixelSetEncoder
+from models.dse import DenseSetEncoder
 from models.tae import TemporalAttentionEncoder
 from models.ltae import LTAE
 from models.decoder import get_decoder
 from models.competings import GRU, TempConv
+import numpy as np
+
+
+class DseLTae(nn.Module):
+    """
+    Pixel-Set encoder + Lightweight Temporal Attention Encoder sequence classifier
+    """
+
+    def __init__(self, input_dim=10, mlp1=[10, 32, 64], 
+                 n_head=16, d_k=8, d_model=256, mlp3=[256, 128], dropout=0.2, T=1000, len_max_seq=24, positions=None,
+                 mlp4=[128, 64, 32, 20], return_att=False):
+        super(DseLTae, self).__init__()
+        # dense 16 -> 64 (tangente iperbolica)
+        self.spatial_encoder = DenseSetEncoder(input_dim, mlp1=mlp1, len_max_seq=len_max_seq)
+
+        self.temporal_encoder = LTAE(in_channels=mlp1[-1], n_head=n_head, d_k=d_k,
+                                           d_model=d_model, n_neurons=mlp3, dropout=dropout,
+                                           T=T, len_max_seq=len_max_seq, positions=positions, return_att=return_att
+                                           )
+        self.decoder = get_decoder(mlp4)
+        self.return_att = return_att
+
+    def forward(self, input):
+        """
+         Args:
+            input(tuple): (Pixel-Set, Pixel-Mask) or ((Pixel-Set, Pixel-Mask), Extra-features)
+            Pixel-Set : Batch_size x Sequence length x Channel x Number of pixels
+            Pixel-Mask : Batch_size x Sequence length x Number of pixels
+            Extra-features : Batch_size x Sequence length x Number of features
+        """
+        out = self.spatial_encoder(input)
+        
+        if self.return_att:
+            out, att = self.temporal_encoder(out)
+            out = self.decoder(out)
+            return out, att
+        else:
+            out = self.temporal_encoder(out)
+            out = self.decoder(out)
+            return out
+
+    def param_ratio(self):
+        total = get_ntrainparams(self)
+        s = get_ntrainparams(self.spatial_encoder)
+        t = get_ntrainparams(self.temporal_encoder)
+        c = get_ntrainparams(self.decoder)
+
+        print('TOTAL TRAINABLE PARAMETERS : {}'.format(total))
+        print('RATIOS: Spatial {:5.1f}% , Temporal {:5.1f}% , Classifier {:5.1f}%'.format(s / total * 100,
+                                                                                          t / total * 100,
+                                                                                          c / total * 100))
+
+        return total
 
 
 class PseLTae(nn.Module):
@@ -38,13 +92,19 @@ class PseLTae(nn.Module):
             Extra-features : Batch_size x Sequence length x Number of features
         """
         out = self.spatial_encoder(input)
+        #out = input
+        d, m= input
+        
+        print("spatial_encoder", d.shape, m.shape,  out.shape)
         if self.return_att:
             out, att = self.temporal_encoder(out)
             out = self.decoder(out)
+            #print("temporal_encoder", out)
             return out, att
         else:
             out = self.temporal_encoder(out)
             out = self.decoder(out)
+            #print("temporal_encoder_noatt", out)
             return out
 
     def param_ratio(self):
