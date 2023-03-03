@@ -8,6 +8,67 @@ import datetime as dt
 
 import os
 import json
+from sklearn.utils import shuffle
+
+
+class PixelSetData_dse(data.Dataset):
+  def __init__(self, folder, imputed=False, MISSING_VALUE=0):
+    """
+
+    Args:
+        folder (str): path to the main folder of the dataset, formatted as indicated in the readme
+    """
+    super(PixelSetData_dse, self).__init__()
+    self.folder = folder
+
+    self.data = np.load(os.path.join(folder,'D1_balaruc_samples.npy'))
+    self.masks = np.load(os.path.join(folder,'D2_balaruc_masks.npy'))
+    self.lut = np.load(os.path.join(folder,'D3_balaruc_lut.npy'))
+    
+    if not imputed:
+        self.data[np.where(self.masks == 1)] = MISSING_VALUE
+
+    self.labels, num_classes = transfer_labels(self.lut[:, 1])
+    
+    self.len = self.data.shape[0]
+
+    with open(os.path.join(folder, 'META', 'dates.json'), 'r') as file:
+      d = json.loads(file.read())
+      self.dates = [d[str(i)] for i in range(len(d))]
+      self.date_positions = date_positions(self.dates)
+  
+  def __len__(self):
+        return self.len
+
+  def __getitem__(self, index):
+    x = self.data[index]
+    y = self.labels[index]
+
+    return Tensor(x), y
+
+  def get_loaders(self, config):
+    folds = [23, 89, 196, 27863]
+    train, val = 0.6, 0.2
+    loader_seq = []
+    for seed in folds:
+        train_indices, validation_indices, test_indices = get_split_idx(self.lut, train_perc=train, val_perc=val, seed=seed)
+        train_sampler = data.sampler.SubsetRandomSampler(train_indices)
+        validation_sampler = data.sampler.SubsetRandomSampler(validation_indices)
+        test_sampler = data.sampler.SubsetRandomSampler(test_indices)
+
+        train_loader = data.DataLoader(self, batch_size=config['batch_size'],
+                                        sampler=train_sampler,
+                                        num_workers=config['num_workers'])
+        validation_loader = data.DataLoader(self, batch_size=config['batch_size'],
+                                            sampler=validation_sampler,
+                                            num_workers=config['num_workers'])
+        test_loader = data.DataLoader(self, batch_size=config['batch_size'],
+                                        sampler=test_sampler,
+                                        num_workers=config['num_workers'])
+
+        loader_seq.append((train_loader, validation_loader, test_loader))
+    
+    return loader_seq
 
 
 class PixelSetData(data.Dataset):
@@ -190,3 +251,50 @@ def date_positions(dates):
     for d in dates:
         pos.append(interval_days(d, dates[0]))
     return pos
+
+def transfer_labels(labels):
+    # some labels are [1,2,4,11,13] and is transfer to standard label format [0,1,2,3,4]
+    indexes = np.unique(labels)
+    num_classes = indexes.shape[0]
+    num_samples = labels.shape[0]
+
+    for i in range(num_samples):
+        new_label = np.argwhere(labels[i] == indexes)[0][0]
+        labels[i] = new_label
+    return labels, num_classes
+
+def get_unique_ids_by_class(lut):
+    labels = lut[:, 1]
+    unique_labels = np.unique(labels)
+    ids_by_class = {}
+    for label in unique_labels:
+      idx = np.where(labels == label)
+      lut_subset = lut[idx]
+      ids_by_class[label] = np.unique(lut_subset[:, 0])
+    return ids_by_class
+
+def get_idx_of_object_ids(ids, lut):
+    lut_ids = lut[:, 0]
+    tot_idx = []
+    for i in ids:
+        tot_idx.append(np.where(lut_ids == i)[0])
+    tot_idx = np.concatenate(tot_idx, axis=0)
+    return tot_idx
+
+def get_split_idx(lut, train_perc=.6, val_perc=.2, seed=23):
+    train_idx, valid_idx, test_idx = [], [], []
+    unique_ids_by_class = get_unique_ids_by_class(lut)
+
+    for label in unique_ids_by_class:
+        ids = unique_ids_by_class[label]
+        ids = shuffle(ids, random_state=seed)
+        
+        limit_train = int(len(ids)* train_perc )
+        limit_val = limit_train + int(len(ids)* val_perc)
+        
+        
+        train_idx.extend(get_idx_of_object_ids(ids[0:limit_train], lut))
+        valid_idx.extend(get_idx_of_object_ids(ids[limit_train:limit_val], lut))
+        test_idx.extend(get_idx_of_object_ids(ids[limit_val:], lut))
+
+    return train_idx, valid_idx, test_idx

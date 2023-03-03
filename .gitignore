@@ -25,7 +25,9 @@ share/python-wheels/
 *.egg-info/
 .installed.cfg
 *.egg
-
+S2*
+SITS-Missin*
+results*
 
 .DS_Store
 MANIFEST

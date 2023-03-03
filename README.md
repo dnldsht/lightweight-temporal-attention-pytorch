@@ -1,4 +1,6 @@
 # Lightweight Temporal Self-Attention (PyTorch)
+
+`python train.py --dataset_folder SITS-Missing-Data --device cpu --input_dim 16 --num_classes 8 --lms 54 --mlp1 [16,32,64] --mlp2 [128,128] --geomfeat 0 --n_head 8 --d_k 8 --mlp3 [128] --d_model=128 --sits_loader`
 A PyTorch implementation of the Light Temporal Attention Encoder (L-TAE) for satellite image time series classification.
 (see [preprint here](https://arxiv.org/abs/2007.00586))
 

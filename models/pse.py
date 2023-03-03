@@ -39,7 +39,8 @@ class PixelSetEncoder(nn.Module):
                                           '|'.join(list(map(str, self.mlp2_dim))))
 
         self.output_dim = input_dim * len(pooling.split('_')) if len(self.mlp2_dim) == 0 else self.mlp2_dim[-1]
-
+        print("pooling.split", len(pooling.split('_')))
+        print("output_dim", self.output_dim)
         inter_dim = self.mlp1_dim[-1] * len(pooling.split('_'))
 
 
@@ -54,6 +55,7 @@ class PixelSetEncoder(nn.Module):
         for i in range(len(self.mlp1_dim) - 1):
             layers.append(linlayer(self.mlp1_dim[i], self.mlp1_dim[i + 1]))
         self.mlp1 = nn.Sequential(*layers)
+        #print("mlp1", self.mlp1)
 
         # MLP after pooling
         layers = []
@@ -63,6 +65,7 @@ class PixelSetEncoder(nn.Module):
             if i < len(self.mlp2_dim) - 2:
                 layers.append(nn.ReLU())
         self.mlp2 = nn.Sequential(*layers)
+        #print("mlp2", self.mlp2)
 
     def forward(self, input):
         """
@@ -91,18 +94,25 @@ class PixelSetEncoder(nn.Module):
             batch, temp = out.shape[:2]
 
             out = out.view(batch * temp, *out.shape[2:])
+            
             mask = mask.view(batch * temp, -1)
             if self.with_extra:
                 extra = extra.view(batch * temp, -1)
         else:
             reshape_needed = False
+        
+        #print("input",out.shape)
 
         out = self.mlp1(out)
+        #print("out_mlp1", out.shape)
         out = torch.cat([pooling_methods[n](out, mask) for n in self.pooling.split('_')], dim=1)
+        #print("out_pooling", out.shape)
 
         if self.with_extra:
             out = torch.cat([out, extra], dim=1)
+        #print("out_extra", out.shape)
         out = self.mlp2(out)
+        #print("out_mlp2", out.shape)
 
         if reshape_needed:
             out = out.view(batch, temp, -1)
