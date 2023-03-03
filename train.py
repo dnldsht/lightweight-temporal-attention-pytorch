@@ -176,7 +176,7 @@ def main(config):
     subset = None
 
     if config['dse']:
-        dt = PixelSetData_dse(config['dataset_folder'])
+        dt = PixelSetData_dse(config['dataset_folder'], config['imputed'])
 
     elif config['preload']:
         dt = PixelSetData_preloaded(config['dataset_folder'], labels='label_44class', npixel=config['npixel'],
@@ -321,11 +321,14 @@ if __name__ == '__main__':
                         help='If specified, the whole dataset is loaded to RAM at initialization')
     parser.add_argument('--dse', dest='dse', action='store_true',
                         help='If specified, Will load SITS dataset and use DSE with masks')
+    parser.add_argument('--imputed', dest='imputed', action='store_true',
+                        help='If specified, Will load SITS dataset with imputed values')
     parser.set_defaults(preload=False)
     parser.set_defaults(sits_loader=False)
+    parser.set_defaults(imputed=False)
 
     # Training parameters
-    parser.add_argument('--kfold', default=5, type=int, help='Number of folds for cross validation')
+    parser.add_argument('--kfold', default=4, type=int, help='Number of folds for cross validation')
     parser.add_argument('--epochs', default=100, type=int, help='Number of epochs per fold')
     parser.add_argument('--batch_size', default=128, type=int, help='Batch size')
     parser.add_argument('--lr', default=0.001, type=float, help='Learning rate')

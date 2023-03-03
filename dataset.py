@@ -12,7 +12,7 @@ from sklearn.utils import shuffle
 
 
 class PixelSetData_dse(data.Dataset):
-  def __init__(self, folder, MISSING_VALUE=0):
+  def __init__(self, folder, imputed=False, MISSING_VALUE=0):
     """
 
     Args:
@@ -24,8 +24,9 @@ class PixelSetData_dse(data.Dataset):
     self.data = np.load(os.path.join(folder,'D1_balaruc_samples.npy'))
     self.masks = np.load(os.path.join(folder,'D2_balaruc_masks.npy'))
     self.lut = np.load(os.path.join(folder,'D3_balaruc_lut.npy'))
-
-    self.data[np.where(self.masks == 1)] = MISSING_VALUE
+    
+    if not imputed:
+        self.data[np.where(self.masks == 1)] = MISSING_VALUE
 
     self.labels, num_classes = transfer_labels(self.lut[:, 1])
     
